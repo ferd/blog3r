@@ -52,7 +52,7 @@ needed_files(G, AllFiles, [{Ext, OutDir}], AppInfo) ->
     end,
     %% Sort the files in build order
     SubGraph = digraph_utils:subgraph(G, NeededFiles),
-    Ordered = digraph_utils:topsort(SubGraph),  % give us a topological sort of it all
+    Ordered = lists:sort(digraph_utils:topsort(SubGraph)), % give us an order of it all
     %% the returned files to build essentially specify a schedule and priority with special
     %% option sets
      %% We use ErlyDTL in module mode, which means only one module at a time exists
