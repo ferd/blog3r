@@ -97,8 +97,25 @@ Add the plugin to your rebar config, and configure the blogs and blog posts:
 ]}.
 ```
 
+## Plugin Template
+
+If you declare the plugin globally (in `~/.config/rebar3/rebar.config`), templates for blog projects will be available, setting up a basic structure:
+
+```
+$ rebar3 new blog testblog
+===> Writing testblog/rebar.config
+===> Writing testblog/templates/base.tpl
+...
+===> Writing testblog/src/testblog.app.src
+$ cd testblog
+$ rebar3 compile
+...
+===> Analyzing applications...
+===> Compiling testblog
+```
+
+The files will be built in `./compiled/`. Edit `rebar.config` to set the proper hostnames and paths since by default, absolute links at `https://example.org` are used. Absolute links are preferred for all link configurations since otherwise, RSS entries containing images will link to the reader app's path and not the original site.
+
 ## Roadmap
 
-- Add templates for posts and basic structure
-- Add a demo blog (possibly just using the templates)
 - Revamp the terrible markdown handling

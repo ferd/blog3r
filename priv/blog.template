@@ -1,0 +1,20 @@
+{description, "Sets up a blog project"}.
+{variables, [
+    {name, "blog", "name of the blogging project"}
+  ]}.
+{dir, "{{name}}/templates"}.
+{dir, "{{name}}/posts"}.
+{dir, "{{name}}/static"}.
+{dir, "{{name}}/static/css"}.
+{dir, "{{name}}/static/img"}.
+{file, "rebar.config", "{{name}}/rebar.config"}.
+{file, "base.tpl", "{{name}}/templates/base.tpl"}.
+{file, "index.tpl", "{{name}}/templates/index.tpl"}.
+{file, "rss.tpl", "{{name}}/templates/rss.tpl"}.
+{file, "hello.tpl", "{{name}}/posts/hello.tpl"}.
+{file, "second.tpl", "{{name}}/posts/second.tpl"}.
+{file, "markdown.tpl", "{{name}}/posts/markdown.tpl"}.
+{file, "static/css/screen.css", "{{name}}/static/css/screen.css"}.
+{file, "static/img/favicon.ico", "{{name}}/static/img/favicon.ico"}.
+{file, "static/img/squid.png", "{{name}}/static/img/favicon.png"}.
+{template, "app.app.src", "{{name}}/src/{{name}}.app.src"}.
