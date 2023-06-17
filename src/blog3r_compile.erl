@@ -68,14 +68,19 @@ compile_and_track(File, [OutMap], AppOpts, {Mapped, Vars}) ->
     Opts = rebar_opts:get(AppOpts, blog3r),
     FeedSrc = cfg(template, cfg(feed, Opts)),
     IndexSrc = cfg(template, cfg(index, Opts)),
+    DocRoot = filename:join(lists:reverse(tl(lists:dropwhile(
+       fun("posts") -> false;
+          ("templates") -> false;
+          (_) -> true
+       end, lists:reverse(filename:split(File)))
+    )) ++ ["templates"]),
     case filename:basename(File) of
         IndexSrc ->
             Index = [[{date, Date}, {title, Title}, {slug, sluggify(Title)}]
                      || {{Date, _LongDate, Title}, _Src, _Artifact, _Opts} <- Mapped],
-            DocRoot = filename:join(filename:dirname(filename:dirname(File)), "templates"),
             BuildOpts = [{doc_root, DocRoot},
-                         {vars, [{pages, lists:reverse(lists:sort(Index))}
-                                 | Vars]}],
+                         {default_vars, [{pages, lists:reverse(lists:sort(Index))}
+                                         | Vars]}],
             {ok, tpl} = erlydtl:compile(File, tpl, BuildOpts),
             {ok, Text} = tpl:render([]),
             Artifact = out(OutMap, "index"),
@@ -89,7 +94,6 @@ compile_and_track(File, [OutMap], AppOpts, {Mapped, Vars}) ->
                          {slug, sluggify(Title)}, {desc, rss_entry(Artifact)}]
                         || {{Date, LongDate, Title}, _Src, Artifact, _Opts} <- Entries],
             [_, {date, LatestDate}|_] = hd(Articles),
-            DocRoot = filename:join(filename:dirname(filename:dirname(File)), "templates"),
             BuildOpts = [{doc_root, DocRoot},
                          {default_vars, [{articles, Articles},
                                          {latest_date, LatestDate}] ++ Vars},
@@ -173,9 +177,14 @@ out({Ext, Dir}, Title) ->
 build_opts(File, Date, Title, Vars) ->
     Meta = {meta, [{date, format_date(Date)},
                    {title, Title}]},
-    DocRoot = filename:join(filename:dirname(filename:dirname(File)), "templates"),
+    DocRoot = filename:join(lists:reverse(tl(lists:dropwhile(
+       fun("posts") -> false;
+          ("templates") -> false;
+          (_) -> true
+       end, lists:reverse(filename:split(File)))
+    )) ++ ["templates"]),
     [{doc_root, DocRoot},
-     {vars, [Meta|Vars]}].
+     {default_vars, [Meta|Vars]}].
 
 opts_changed(G, Opts, Artifact) ->
     case digraph:vertex(G, Artifact) of

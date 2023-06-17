@@ -1,15 +1,15 @@
 {"1.2.0",
-[{<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.13.1">>},0},
+[{<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.14.0">>},0},
  {<<"markdown">>,
-  {git,"https://github.com/erlware/erlmarkdown.git",
-       {ref,"8ef862ebf85380a8aedfdd66cdaa26db87a8bc3f"}},
+  {git,"https://github.com/ferd/erlmarkdown.git",
+       {ref,"8cc5a570a7f3263ef6b1c244ea9ab61d58161555"}},
   0},
- {<<"mochiweb">>,{pkg,<<"mochiweb">>,<<"2.20.1">>},0}]}.
+ {<<"mochiweb">>,{pkg,<<"mochiweb">>,<<"3.1.2">>},0}]}.
 [
 {pkg_hash,[
- {<<"erlydtl">>, <<"91481928557544C843E2B33F8AA17693F16B65EEBC9EF08C71EBE90CBD1A84F1">>},
- {<<"mochiweb">>, <<"E4DBD0ED716F076366ECF62ADA5755A844E1D95C781E8C77DF1D4114BE868CDF">>}]},
+ {<<"erlydtl">>, <<"964B2DC84F8C17ACFAA69C59BA129EF26AC45D2BA898C3C6AD9B5BDC8BA13CED">>},
+ {<<"mochiweb">>, <<"D872D470DBBA367171A38C41592B19DE370854E74C8621BF0C6FE39B17CDD1CF">>}]},
 {pkg_hash_ext,[
- {<<"erlydtl">>, <<"A366C4CD32E8B54D7D0825AA51EF6A12C35D6D558BEFFC276275AD335B1FDBED">>},
- {<<"mochiweb">>, <<"D1AEEE7870470D2FA9EAE0B3D5AB6C33801AA2D82B10E9DADE885C5C921B36AA">>}]}
+ {<<"erlydtl">>, <<"D80EC044CD8F58809C19D29AC5605BE09E955040911B644505E31E9DD8143431">>},
+ {<<"mochiweb">>, <<"A8609035711F9264E8ABE54312D1B1645374B9E08986AE06E979BB0AC8B99F9F">>}]}
 ].
