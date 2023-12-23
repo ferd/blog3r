@@ -239,17 +239,18 @@ markdown(Bin) ->
 % ideally we'd get a more clever algorithm but eh
 parse([]) -> [];
 parse("{% markdown %}" ++ Rest) ->
-    {MD, Other} = markdown(Rest, []),
+    {MD, Other} = markdown_conv(Rest),
     [MD | parse(Other)];
 parse([Char | Rest]) ->
     [Char | parse(Rest)].
 
-markdown("{% endmarkdown %}" ++ Rest, Acc) ->
-    {markdown:conv(lists:reverse(Acc)), Rest};
-markdown([], _) ->
-    error("Markdown closing tag ({% endmarkdown %}) not found");
-markdown([Char|Rest], Acc) ->
-    markdown(Rest, [Char|Acc]).
+markdown_conv(Str) ->
+    case string:split(Str, "{% endmarkdown %}", leading) of
+        [MarkDown, Rest] ->
+            {markdown:conv_utf8(MarkDown), Rest};
+        _ ->
+            error("Markdown closing tag ({% endmarkdown %}) not found")
+    end.
 
 render_code(BaseHTML) ->
     case has_pygments() of
