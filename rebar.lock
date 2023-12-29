@@ -2,7 +2,7 @@
 [{<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.14.0">>},0},
  {<<"markdown">>,
   {git,"https://github.com/ferd/erlmarkdown.git",
-       {ref,"8cc5a570a7f3263ef6b1c244ea9ab61d58161555"}},
+       {ref,"44867744c1f906ed64753f2da4be7e00c4c6226b"}},
   0},
  {<<"mochiweb">>,{pkg,<<"mochiweb">>,<<"3.1.2">>},0}]}.
 [
