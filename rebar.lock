@@ -2,14 +2,14 @@
 [{<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.14.0">>},0},
  {<<"markdown">>,
   {git,"https://github.com/ferd/erlmarkdown.git",
-       {ref,"8cc5a570a7f3263ef6b1c244ea9ab61d58161555"}},
+       {ref,"ea1b889bc030ba931fcc8164614b4660b3b278be"}},
   0},
- {<<"mochiweb">>,{pkg,<<"mochiweb">>,<<"3.1.2">>},0}]}.
+ {<<"mochiweb">>,{pkg,<<"mochiweb">>,<<"3.2.2">>},0}]}.
 [
 {pkg_hash,[
  {<<"erlydtl">>, <<"964B2DC84F8C17ACFAA69C59BA129EF26AC45D2BA898C3C6AD9B5BDC8BA13CED">>},
- {<<"mochiweb">>, <<"D872D470DBBA367171A38C41592B19DE370854E74C8621BF0C6FE39B17CDD1CF">>}]},
+ {<<"mochiweb">>, <<"BB435384B3B9FD1F92F2F3FE652EA644432877A3E8A81ED6459CE951E0482AD3">>}]},
 {pkg_hash_ext,[
  {<<"erlydtl">>, <<"D80EC044CD8F58809C19D29AC5605BE09E955040911B644505E31E9DD8143431">>},
- {<<"mochiweb">>, <<"A8609035711F9264E8ABE54312D1B1645374B9E08986AE06E979BB0AC8B99F9F">>}]}
+ {<<"mochiweb">>, <<"4114E51F1B44C270B3242D91294FE174CE1ED989100E8B65A1FAB58E0CBA41D5">>}]}
 ].
