@@ -1,10 +1,6 @@
 {% extends "base.tpl" %}
 
-{% block title %}Hello, World{% endblock %}
-
 {% block content %}
-<h2>Hello, World</h2>
-
 <p>I like cats. I like food. <br />
    I don't especially like catfood though.</p>
 

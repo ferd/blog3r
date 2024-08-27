@@ -2,32 +2,56 @@
 -export([context/1, dependencies/4, needed_files/4, compile_and_track/4, clean/2]).
 -define(TMP_CODE_FILE, "/tmp/blogerl-pre.tmp").
 
+-type index() :: #{template := file:filename_all(),
+                   out := file:filename_all(),
+                   section := atom()}.
+-type out_mappings() :: [{string(), file:filename_all()}, ...].
+
+-type sections() :: #{atom() => section()}.
+-type section() :: {file:filename_all(), file:filename_all(), [page()]}.
+-type page() :: {longdate(), title(), file:filename_all()}.
+-type longdate() :: string().
+-type title() :: string().
+
+-type vars() :: [{doc_root, file:filename_all()}
+                 | {default_vars, default_vars()}
+                 | {atom(), term()}].
+-type default_vars() :: [{pages, [page_vars()]}
+                        |{page, page_vars()}
+                        |{atom(), term()}].
+-type page_vars() :: [{date, string()} | {longdate, longdate()} |
+                      {title, title()} | {slug, title()} | {out, file:filename_all()}].
+
 %% specify what kind of files to find and where to find them. Rebar3 handles
 %% doing all the searching from these concepts.
 context(AppInfo) ->
-    AppDir = rebar_app_info:dir(AppInfo),
-    SrcDirs = [filename:join([AppDir, "posts"]),
-               filename:join([AppDir, "templates"])],
+    {_Opts, AppDir, Sections, Indices, Vars} = from_app_info(AppInfo),
+    PostDirs = lists:usort([SrcDir || {SrcDir, _OutDir, _Posts} <- maps:values(Sections)]),
+    SrcDirs = [filename:join([AppDir, PostDir]) || PostDir <- PostDirs]
+              ++ [filename:join([AppDir, "templates"])],
     InclDirs = [filename:join([AppDir, "templates"])],
-    OutMaps = [{".html", filename:join([AppDir, "compiled"])}],
-    Opts = rebar_app_info:get(AppInfo, blog3r, unconfigured),
-    #{src_dirs     => SrcDirs,
+    OutMaps = [{".html", filename:join([AppDir, "compiled"])},
+               {".rss", filename:join([AppDir, "compiled"])}],
+    #{src_dirs     => lists:usort(SrcDirs),
       include_dirs => InclDirs,
       src_ext      => ".tpl",
       out_mappings => OutMaps,
-      dependencies_opts => Opts}.
+      dependencies_opts => {AppDir, Vars, Sections, Indices}}.
 
 %% Define which files each of the files depends on, including includes and whatnot.
 %% This is then used to create a digraph of all existing files to know how to propagate
 %% file changes. The Digraph is passed to other callbacks as `G' and annotaes all files
 %% with their last changed timestamp
 %% Prior to 3.14, the `State' argument was not available.
-dependencies(SrcFile, _SrcDir, AllDirs, _Opts) ->
-    BaseNames = find_deps(SrcFile),
-    [FullName || Name <- BaseNames,
-                         Dir <- AllDirs,
-                         FullName <- [filename:join([Dir, Name])],
-                         filelib:is_file(FullName)].
+dependencies(SrcFile, _SrcDir, AllDirs, {AppDir, _Vars, Sections, Indices}) ->
+    BaseNames = find_tpl_deps(SrcFile),
+    TplDeps = [FullName
+               || Name <- BaseNames,
+                  Dir <- AllDirs,
+                  FullName <- [filename:join([Dir, Name])],
+                  filelib:is_file(FullName)],
+    IndexDeps = find_index_deps(SrcFile, Indices, Sections, AppDir),
+    lists:usort(TplDeps ++ IndexDeps).
 
 %% do your own analysis aided by the graph to specify what needs re-compiling.
 %% You can use this to add more or fewer files (i.e. compiler options changed),
@@ -36,85 +60,40 @@ dependencies(SrcFile, _SrcDir, AllDirs, _Opts) ->
 %% timestamps than their build artifacts (which are also in the DAG after the
 %% first build) or those with compiler options that changed (the
 %% compile_and_track callback lets you annotate artifacts)
-needed_files(G, AllFiles, [{Ext, OutDir}], AppInfo) ->
-    Opts = rebar_app_info:get(AppInfo, blog3r, []),
-    IndexCfg = cfg(index, Opts, []),
-    Mappings = cfg(mappings, IndexCfg, []),
-    Vars = cfg(vars, Opts),
-    {Mapped, NeededFiles} = needed(G, AllFiles, {Ext, OutDir}, Mappings, Vars),
-    RebuildShared = case NeededFiles of
-        [] ->
-            [];
-        _ ->
-            IndexSrc = expand_name(cfg(template, IndexCfg), AllFiles),
-            FeedSrc = expand_name(cfg(template, cfg(feed, Opts)), AllFiles),
-            [IndexSrc, FeedSrc] % TODO: only rebuild feed if needed files changed
-    end,
+needed_files(G, _AllFiles, OutMaps, AppInfo) ->
+    {_Opts, AppDir, Sections, Indices, Vars} = from_app_info(AppInfo),
+    Annotated = indices_annotations(Indices, AppDir, OutMaps, Sections, Vars)
+              ++ pages_annotations(Sections, AppDir, OutMaps, Vars),
+    ToBuild = lists:filter(
+        fun({Source, Artifact, FileOpts}) ->
+            digraph:vertex(G, Source) > {Source, filelib:last_modified(Artifact)}
+            orelse opts_changed(G, FileOpts, Artifact)
+        end,
+        Annotated
+    ),
+    NeededFiles = [Source || {Source, _, _} <- ToBuild],
+    %%%
     %% Sort the files in build order
     SubGraph = digraph_utils:subgraph(G, NeededFiles),
-    Ordered = lists:sort(digraph_utils:topsort(SubGraph)), % give us an order of it all
+    Ordered = lists:reverse(digraph_utils:topsort(SubGraph)), % give us an order of it all
+    rebar_api:debug("ordered: ~p", [Ordered]),
     %% the returned files to build essentially specify a schedule and priority with special
     %% option sets
      %% We use ErlyDTL in module mode, which means only one module at a time exists
      %% and we therefore must do a sequential build.
-    {{Ordered, Mapped},
-     %% Finish with the special files which must come after the others
-     {{RebuildShared, []}, {Mapped, Vars}}}.
+    {{Ordered, Annotated}, {{[], []}, {Annotated, Vars}}}.
 
 %% Compilation callback with the ability to track build artifacts in the DAG itself.
-compile_and_track(File, [OutMap], AppOpts, {Mapped, Vars}) ->
-    %% Rebuilding the index.html and feed.rss files, built last.
-    rebar_api:debug("Compiling: ~p", [File]),
-    Opts = rebar_opts:get(AppOpts, blog3r),
-    FeedSrc = cfg(template, cfg(feed, Opts)),
-    IndexSrc = cfg(template, cfg(index, Opts)),
-    DocRoot = filename:join(lists:reverse(tl(lists:dropwhile(
-       fun("posts") -> false;
-          ("templates") -> false;
-          (_) -> true
-       end, lists:reverse(filename:split(File)))
-    )) ++ ["templates"]),
-    case filename:basename(File) of
-        IndexSrc ->
-            Index = [[{date, Date}, {title, Title}, {slug, sluggify(Title)}]
-                     || {{Date, _LongDate, Title}, _Src, _Artifact, _Opts} <- Mapped],
-            BuildOpts = [{doc_root, DocRoot},
-                         {default_vars, [{pages, lists:reverse(lists:sort(Index))}
-                                         | Vars]}],
-            {ok, tpl} = erlydtl:compile(File, tpl, BuildOpts),
-            {ok, Text} = tpl:render([]),
-            Artifact = out(OutMap, "index"),
-            filelib:ensure_dir(Artifact),
-            ok = file:write_file(Artifact, Text),
-            {ok, [{File, Artifact, BuildOpts}]};
-        FeedSrc ->
-            Num = cfg(num_entries, cfg(feed, Opts), 5),
-            Entries = lists:sublist(lists:reverse(lists:sort(Mapped)), Num),
-            Articles = [[{sort, Date}, {date, LongDate}, {title, Title},
-                         {slug, sluggify(Title)}, {desc, rss_entry(Artifact)}]
-                        || {{Date, LongDate, Title}, _Src, Artifact, _Opts} <- Entries],
-            [_, {date, LatestDate}|_] = hd(Articles),
-            BuildOpts = [{doc_root, DocRoot},
-                         {default_vars, [{articles, Articles},
-                                         {latest_date, LatestDate}] ++ Vars},
-                         {auto_escape, false}],
-            {ok, tpl} = erlydtl:compile(File, tpl, BuildOpts),
-            {ok, Text} = tpl:render([]),
-            {_Ext, Dir} = OutMap,
-            Artifact = filename:join(Dir, "feed.rss"),
-            filelib:ensure_dir(Artifact),
-            ok = file:write_file(Artifact, Text),
-            {ok, [{File, Artifact, [LatestDate, Num]}]}
-    end;
-compile_and_track(File, _OutMaps, _AppConfig, Mapped) ->
+compile_and_track(File, OutMaps, _AppConfig, Annotated) ->
     %% Regular blog posts
     rebar_api:debug("Compiling: ~p", [File]),
-    {_Key, Source, Artifact, BuildOpts} = lists:keyfind(File, 2, Mapped),
+    {Source, Artifact, BuildOpts} = lists:keyfind(File, 1, Annotated),
     {ok, Bin} = file:read_file(Source),
     MD = markdown(Bin),
     {ok, tpl} = erlydtl:compile(MD, tpl, BuildOpts),
     {ok, Text} = tpl:render(BuildOpts),
-    CodeText = render_code(Text),
+    Expanded = expand_content(OutMaps, Text),
+    CodeText = render_code(Expanded),
     rebar_api:debug("Writing ~p", [Artifact]),
     filelib:ensure_dir(Artifact),
     file:write_file(Artifact, CodeText),
@@ -126,27 +105,84 @@ clean(_Files, _AppInfo) -> ok.
 %%%%%%%%%%%%%%%
 %%% PRIVATE %%%
 %%%%%%%%%%%%%%%
-find_deps(File) ->
+
+%% @private find dependencies coming from the templating structure
+find_tpl_deps(File) ->
     {ok, Bin} = file:read_file(File),
     {ok, Tokens} = erlydtl_scanner:scan(Bin),
-    lists:usort(find_deps_(Tokens)).
+    lists:usort(find_tpl_deps_(Tokens)).
 
-find_deps_([]) ->
+find_tpl_deps_([]) ->
     [];
     %% Extends literal
-find_deps_([{open_tag, _, _}, {extends_keyword, _, _},
+find_tpl_deps_([{open_tag, _, _}, {extends_keyword, _, _},
             {string_literal, _, Str}, {close_tag, _, _}|Rest]) ->
-    [string:trim(Str, both, "\"") | find_deps_(Rest)];
+    [string:trim(Str, both, "\"") | find_tpl_deps_(Rest)];
     %% include literal
-find_deps_([{open_tag, _, _}, {include_keyword, _, _},
+find_tpl_deps_([{open_tag, _, _}, {include_keyword, _, _},
             {string_literal, _, Str}, {close_tag, _, _}|Rest]) ->
-    [string:trim(Str, both, "\"") | find_deps_(Rest)];
-find_deps_([_|Rest]) ->
-    find_deps_(Rest).
+    [string:trim(Str, both, "\"") | find_tpl_deps_(Rest)];
+find_tpl_deps_([_|Rest]) ->
+    find_tpl_deps_(Rest).
 
-expand_name(Name, Files) ->
-    {value, F} = lists:search(fun(F) -> lists:suffix(Name, F) end, Files),
-    F.
+%% @private find dependencies for index files, based on their sections
+find_index_deps(_, [], _, _) ->
+    [];
+find_index_deps(File, [Index|Indices], Sections, AppDir) ->
+    #{template := Basename, section := Key} = Index,
+    case filename:basename(File) of
+        Basename -> % matching!
+            #{Key := {SrcDir, _OutDir, Entries}} = Sections,
+            [filename:join([AppDir, SrcDir, EntrySrc])
+             || {_Date, _Title, EntrySrc} <- Entries];
+        _ ->
+            find_index_deps(File, Indices, Sections, AppDir)
+    end.
+
+%% @private create sections between source files and their artifacts and options
+-spec indices_annotations([index()], AppDir, out_mappings(), sections(), vars()) ->
+    [{Src, Artifact, vars()}]
+    when AppDir :: file:filename_all(),
+         Src :: file:filename_all(),
+         Artifact :: file:filename_all().
+indices_annotations(Indices, AppDir, OutMaps, Sections, Vars) ->
+    [{_DefaultExt, DefaultOutDir}|_] = OutMaps,
+    [{filename:join([AppDir, "templates", Tpl]),
+      filename:join([cfg(filename:extension(Out), OutMaps, DefaultOutDir), safe_rel(Out)]),
+      [{doc_root, filename:join(AppDir, "templates")},
+       {default_vars, [pages_vars(MapName, Sections)|Vars]}]}
+     || #{template := Tpl, out := Out, section := MapName} <- Indices].
+
+-spec pages_annotations(sections(), AppDir, out_mappings(), vars()) ->
+    [{Src, Artifact, vars()}]
+    when AppDir :: file:filename_all(),
+         Src :: file:filename_all(),
+         Artifact :: file:filename_all().
+pages_annotations(Sections, AppDir, OutMaps, Vars) ->
+    [{DefaultExt, DefaultOutDir}|_] = OutMaps,
+    [{filename:join([AppDir, safe_rel(SrcDir), safe_rel(Tpl)]),
+      filename:join([DefaultOutDir, safe_rel(OutSub), sluggify(Title)++DefaultExt]),
+      [{doc_root, filename:join(AppDir, "templates")},
+       {default_vars, [{page, [{date, format_date(Date)}, {longdate, Date}, {title, Title},
+                       {slug, sluggify(Title)}, {out, safe_rel(OutSub)}]}
+                      | Vars]}]}
+     || {SrcDir, OutSub, Pages} <- maps:values(Sections),
+        {Date, Title, Tpl} <- Pages].
+
+%% @private make a path safe for relative use; basically any root path is
+%% turned into a relative one by prepending a period.
+safe_rel("/"++Path) -> "./"++Path;
+safe_rel(Path) -> Path.
+
+-spec pages_vars(atom(), sections()) -> {pages, [page_vars()]}.
+%% @private generate the template variables for all possible pages within a section
+pages_vars(Name, Map) ->
+    #{Name := {_In, RawOut, Posts}} = Map,
+    Out = safe_rel(RawOut),
+    Attrs = [[{date, format_date(Date)}, {longdate, Date},
+              {title, Title}, {slug, sluggify(Title)}, {out, Out}]
+             || {Date, Title, _EntrySrc} <- Posts],
+    {pages, Attrs}.
 
 cfg(Key, Proplist) ->
     proplists:get_value(Key, Proplist).
@@ -154,37 +190,17 @@ cfg(Key, Proplist) ->
 cfg(Key, Proplist, Default) ->
     proplists:get_value(Key, Proplist, Default).
 
-needed(G, Found, OutInfo, Mappings, Vars) ->
-    %% Only build files in mappings, but expand paths to those found.
-    %% For each of them, assemble the build options and the build target.
-    %% Check if the file specifically needs re-building.
-    ToCheck = [{{format_date(Date), Date, Title}, Source, out(OutInfo, Title),
-                build_opts(Source, Date, Title, Vars)}
-               || {Date, Title, BaseName} <- Mappings,
-                   Source <- [expand_name(BaseName, Found)]],
-    ToBuild = lists:filter(
-        fun({_Key, Source, Artifact, Opts}) ->
-            digraph:vertex(G, Source) > {Source, filelib:last_modified(Artifact)}
-            orelse opts_changed(G, Opts, Artifact)
-        end,
-        ToCheck
-    ),
-    {ToCheck, [Source || {_Key, Source, _, _} <- ToBuild]}.
+cfgs(Key, Proplist) ->
+    proplists:get_all_values(Key, Proplist).
 
-out({Ext, Dir}, Title) ->
-    filename:join([Dir, sluggify(Title) ++ Ext]).
-
-build_opts(File, Date, Title, Vars) ->
-    Meta = {meta, [{date, format_date(Date)},
-                   {title, Title}]},
-    DocRoot = filename:join(lists:reverse(tl(lists:dropwhile(
-       fun("posts") -> false;
-          ("templates") -> false;
-          (_) -> true
-       end, lists:reverse(filename:split(File)))
-    )) ++ ["templates"]),
-    [{doc_root, DocRoot},
-     {default_vars, [Meta|Vars]}].
+%% @private extract common required elements for various callbacks
+from_app_info(AppInfo) ->
+    AppDir = rebar_app_info:dir(AppInfo),
+    Opts = rebar_app_info:get(AppInfo, blog3r, []),
+    Sections = cfg(sections, Opts, #{}),
+    Indices = cfgs(index, Opts),
+    Vars = cfg(vars, Opts, []),
+    {Opts, AppDir, Sections, Indices, Vars}.
 
 opts_changed(G, Opts, Artifact) ->
     case digraph:vertex(G, Artifact) of
@@ -250,6 +266,38 @@ markdown_conv(Str) ->
             {markdown:conv_utf8(MarkDown), Rest};
         _ ->
             error("Markdown closing tag ({% endmarkdown %}) not found")
+    end.
+
+expand_content(OutMap, Str) ->
+    maybe
+        %% Find the spots with {! inline <filename> Node[#id] !} in them and
+        %% split the components
+        [PreExpand, TmpStr] ?= string:split(Str, "{! inline ", leading),
+        [Opts, PostExpand] ?= string:split(TmpStr, " !}", leading),
+        [File, Node] ?= string:split(Opts, " ", trailing),
+        {Pre, Mid, Post} =
+          maybe
+              %% Happy path substitution
+              FileName = unicode:characters_to_list(File),
+              Path = case cfg(filename:extension(FileName), OutMap) of
+                  undefined -> FileName;
+                  OutDir -> filename:join(OutDir, FileName)
+              end,
+              %% These are most faillible calls
+              {ok, FileContent} ?= file:read_file(Path),
+              {ok, Content} ?= get_node(Node, FileContent),
+              {PreExpand, Content, PostExpand}
+          else
+              Reason ->
+                %% Eat up all errors by leaving things the same.
+                rebar_api:warn("post-processing failed for file ~ts and node ~ts for reason ~p",
+                               [File, Node, Reason]),
+                {PreExpand, ["{! inline ", Opts, " !}"], PostExpand}
+          end,
+        unicode:characters_to_binary([Pre, Mid, expand_content(OutMap, Post)])
+    else
+        %% no valid processing declaration found, skip this file
+        _ -> Str
     end.
 
 render_code(BaseHTML) ->
@@ -353,23 +401,43 @@ unescape_code(OrigStr) ->
                  {"&lt;", "<"},
                  {"&amp;", "\\&"}]).
 
+%% @private Go down a mochiweb_html tree, and extract the first node that
+%% matches the passed in argument. The node may either be a name for the
+%% element (such as `article`) or a name and an id (such as `div#id`).
+get_node(Node, Data) ->
+    case string:split(Node, "#") of
+        [NodePart, Id] ->
+            get_node(unicode:characters_to_binary(NodePart),
+                     unicode:characters_to_binary(Id),
+                     Data);
+        _ ->
+            get_node(unicode:characters_to_binary(Node), undefined, Data)
+    end.
 
-rss_entry(FileName) ->
-    {ok, Bin} = file:read_file(FileName),
-    "<![CDATA[" ++
-    mochiweb_html:to_html(
-      {<<"div">>, [],
-       article(mochiweb_html:parse(Bin))}
-    )
-    ++"]]>".
+get_node(Node, Id, Data) ->
+    case tree_node(Node, Id, mochiweb_html:parse(Data)) of
+        not_found ->
+            {error, {node_not_found, {Node, Id}}};
+        Content ->
+            {ok, mochiweb_html:to_html({<<"div">>, [], Content})}
+    end.
 
-article({<<"article">>, _, Content}) -> Content;
-article({_, _, Tree}) -> article(Tree);
-article({comment, _}) -> not_found;
-article(Bin) when is_binary(Bin) -> not_found;
-article([]) -> not_found;
-article([H|T]) ->
-    case article(H) of
-        not_found -> article(T);
-        Article -> Article
+tree_node(Node, Id, {Node, Attrs, Content}) ->
+    case cfg(<<"id">>, Attrs) of
+        Id -> Content;
+        _ when Id =:= undefined -> Content;
+        _ -> tree_node(Node, Id, Content)
+    end;
+tree_node(Node, Id, {_, _, Tree}) ->
+    tree_node(Node, Id, Tree);
+tree_node(_, _, {comment, _}) ->
+    not_found;
+tree_node(_, _, Bin) when is_binary(Bin) ->
+    not_found;
+tree_node(_, _, []) ->
+    not_found;
+tree_node(Node, Id, [H|T]) ->
+    case tree_node(Node, Id, H) of
+        not_found -> tree_node(Node, Id, T);
+        Content -> Content
     end.

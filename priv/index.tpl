@@ -4,8 +4,6 @@
 {% block date %}{% endblock %}
 
 {% block content %}
-<h2>Oh, Hello There!</h2>
-
 <ul class="index">
 {% for page in pages %}
     <li>
