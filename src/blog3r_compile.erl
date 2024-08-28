@@ -86,18 +86,38 @@ needed_files(G, _AllFiles, OutMaps, AppInfo) ->
 %% Compilation callback with the ability to track build artifacts in the DAG itself.
 compile_and_track(File, OutMaps, _AppConfig, Annotated) ->
     %% Regular blog posts
-    rebar_api:debug("Compiling: ~p", [File]),
-    {Source, Artifact, BuildOpts} = lists:keyfind(File, 1, Annotated),
-    {ok, Bin} = file:read_file(Source),
-    MD = markdown(Bin),
-    {ok, tpl} = erlydtl:compile(MD, tpl, BuildOpts),
-    {ok, Text} = tpl:render(BuildOpts),
-    Expanded = expand_content(OutMaps, Text),
-    CodeText = render_code(Expanded),
-    rebar_api:debug("Writing ~p", [Artifact]),
-    filelib:ensure_dir(Artifact),
-    file:write_file(Artifact, CodeText),
-    {ok, [{File, Artifact, BuildOpts}]}.
+    try
+        rebar_api:debug("Compiling: ~p", [File]),
+        {Source, Artifact, BuildOpts} = lists:keyfind(File, 1, Annotated),
+        {ok, Bin} = file:read_file(Source),
+        MD = markdown(Bin),
+        case erlydtl:compile(MD, tpl, [return|BuildOpts]) of
+            {ok, tpl} ->
+                ok;
+            {ok, tpl, _Warns} ->
+                ok;
+            error ->
+                error(erlydtl_error);
+            {error, [{_, Reasons}], _} = _Err ->
+                rebar_api:debug("~p", [_Err]),
+                [rebar_api:error("template error:~n~ts", [
+                    rebar_compiler_format:format(File, {Ln, Col}, "", Str, [rich])
+                 ]) || {{Ln,Col}, _Mod, Str} <- Reasons],
+                [rebar_api:error("template error in ~ts:~n~p", [File, Term])
+                 || {none, _Mod, Term} <- Reasons],
+                %error(erlydtl_error)
+                ok
+        end,
+        {ok, Text} = tpl:render(BuildOpts),
+        Expanded = expand_content(OutMaps, Text),
+        CodeText = render_code(Expanded),
+        rebar_api:debug("Writing ~p", [Artifact]),
+        filelib:ensure_dir(Artifact),
+        file:write_file(Artifact, CodeText),
+        {ok, [{File, Artifact, BuildOpts}]}
+    catch
+        error:erlydtl_error -> error
+    end.
 
 %% Just delete files however you need to
 clean(_Files, _AppInfo) -> ok.
