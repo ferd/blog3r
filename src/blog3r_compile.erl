@@ -1,6 +1,5 @@
 -module(blog3r_compile).
 -export([context/1, dependencies/4, needed_files/4, compile_and_track/4, clean/2]).
--define(TMP_CODE_FILE, "/tmp/blogerl-pre.tmp").
 
 -type index() :: #{template := file:filename_all(),
                    out := file:filename_all(),
@@ -76,11 +75,10 @@ needed_files(G, _AllFiles, OutMaps, AppInfo) ->
     %% Sort the files in build order
     SubGraph = digraph_utils:subgraph(G, NeededFiles),
     Ordered = lists:reverse(digraph_utils:topsort(SubGraph)), % give us an order of it all
-    rebar_api:debug("ordered: ~p", [Ordered]),
     %% the returned files to build essentially specify a schedule and priority with special
     %% option sets
-     %% We use ErlyDTL in module mode, which means only one module at a time exists
-     %% and we therefore must do a sequential build.
+    %% We use ErlyDTL in module mode, which means only one module at a time exists
+    %% and we therefore must do a sequential build.
     {{Ordered, Annotated}, {{[], []}, {Annotated, Vars}}}.
 
 %% Compilation callback with the ability to track build artifacts in the DAG itself.
@@ -90,30 +88,13 @@ compile_and_track(File, OutMaps, _AppConfig, Annotated) ->
         rebar_api:debug("Compiling: ~p", [File]),
         {Source, Artifact, BuildOpts} = lists:keyfind(File, 1, Annotated),
         {ok, Bin} = file:read_file(Source),
-        MD = markdown(Bin),
-        case erlydtl:compile(MD, tpl, [return|BuildOpts]) of
-            {ok, tpl} ->
-                ok;
-            {ok, tpl, _Warns} ->
-                ok;
-            error ->
-                error(erlydtl_error);
-            {error, [{_, Reasons}], _} = _Err ->
-                rebar_api:debug("~p", [_Err]),
-                [rebar_api:error("template error:~n~ts", [
-                    rebar_compiler_format:format(File, {Ln, Col}, "", Str, [rich])
-                 ]) || {{Ln,Col}, _Mod, Str} <- Reasons],
-                [rebar_api:error("template error in ~ts:~n~p", [File, Term])
-                 || {none, _Mod, Term} <- Reasons],
-                %error(erlydtl_error)
-                ok
-        end,
-        {ok, Text} = tpl:render(BuildOpts),
-        Expanded = expand_content(OutMaps, Text),
-        CodeText = render_code(Expanded),
+        PreText = pre_process(Bin),
+        Mod = compile_template({File, PreText}, BuildOpts),
+        {ok, Text} = Mod:render(BuildOpts),
+        PostText = post_process(Text, OutMaps),
         rebar_api:debug("Writing ~p", [Artifact]),
         filelib:ensure_dir(Artifact),
-        file:write_file(Artifact, CodeText),
+        file:write_file(Artifact, PostText),
         {ok, [{File, Artifact, BuildOpts}]}
     catch
         error:erlydtl_error -> error
@@ -134,11 +115,11 @@ find_tpl_deps(File) ->
 
 find_tpl_deps_([]) ->
     [];
-    %% Extends literal
+%% 'extends' literal
 find_tpl_deps_([{open_tag, _, _}, {extends_keyword, _, _},
             {string_literal, _, Str}, {close_tag, _, _}|Rest]) ->
     [string:trim(Str, both, "\"") | find_tpl_deps_(Rest)];
-    %% include literal
+%% 'include' literal
 find_tpl_deps_([{open_tag, _, _}, {include_keyword, _, _},
             {string_literal, _, Str}, {close_tag, _, _}|Rest]) ->
     [string:trim(Str, both, "\"") | find_tpl_deps_(Rest)];
@@ -189,10 +170,44 @@ pages_annotations(Sections, AppDir, OutMaps, Vars) ->
      || {SrcDir, OutSub, Pages} <- maps:values(Sections),
         {Date, Title, Tpl} <- Pages].
 
-%% @private make a path safe for relative use; basically any root path is
-%% turned into a relative one by prepending a period.
-safe_rel("/"++Path) -> "./"++Path;
-safe_rel(Path) -> Path.
+%% @private Compile the ErlyDTL template and return the module name
+%% for it
+-spec compile_template({file:filename_all(), string()|binary()}, vars()) -> module().
+compile_template({File, TplStr}, BuildOpts) ->
+    case erlydtl:compile(TplStr, tpl, [return|BuildOpts]) of
+        {ok, tpl} ->
+            tpl;
+        {ok, tpl, _Warns} ->
+            tpl;
+        error ->
+            error(erlydtl_error);
+        {error, [{_, Reasons}], _} ->
+            %% rich errors from syntactic issues
+            [rebar_api:error("template error:~n~ts", [
+                rebar_compiler_format:format(File, {Ln, Col}, "", Str, [rich])
+            ]) || {{Ln,Col}, _Mod, Str} <- Reasons],
+            %% other errors (eg. template dependencies not found)
+            [rebar_api:error("template error in ~ts:~n~p", [File, Term])
+             || {none, _Mod, Term} <- Reasons],
+            error(erlydtl_error)
+    end.
+
+%% @private pre-processing of text, before erlydtl template execution takes
+%% place. Right now, only `{% markdown %} ... {% endmarkdown %}` tags are
+%% handled, and this is done here because I was too lazy to actually do it
+%% within the erlydtl tag framework.
+pre_process(Bin) ->
+    blog3r_markdown:compile(Bin).
+
+%% @private post-processing of text, after erlydtl template execution takes
+%% place. This currently does content expansion (including HTML nodes by ID
+%% with `{! inline <file> <node>[#<id>] !}` syntax) to get literal HTML
+%% content that ignores all template processing, and to do syntax highlighting
+%% by calling out to pygments.
+post_process(Text, OutMaps) ->
+    Expanded = blog3r_inline_html:expand(OutMaps, Text),
+    blog3r_syntax_highlight:render_code(Expanded).
+
 
 -spec pages_vars(atom(), sections()) -> {pages, [page_vars()]}.
 %% @private generate the template variables for all possible pages within a section
@@ -203,9 +218,6 @@ pages_vars(Name, Map) ->
               {title, Title}, {slug, sluggify(Title)}, {out, Out}]
              || {Date, Title, _EntrySrc} <- Posts],
     {pages, Attrs}.
-
-cfg(Key, Proplist) ->
-    proplists:get_value(Key, Proplist).
 
 cfg(Key, Proplist, Default) ->
     proplists:get_value(Key, Proplist, Default).
@@ -222,15 +234,22 @@ from_app_info(AppInfo) ->
     Vars = cfg(vars, Opts, []),
     {Opts, AppDir, Sections, Indices, Vars}.
 
+%% @private check if build options changed by comparing current
+%% ones to those stored in the previously built artifact, if any
 opts_changed(G, Opts, Artifact) ->
     case digraph:vertex(G, Artifact) of
         {_Artifact, {artifact, Opts}} -> false;
         _ -> true
     end.
 
-%% no need to be efficient, and only worrying about latin characters
-%% for now. Some sort of unicode normalization would be more
-%% accurate in the long run.
+%% @private make a path safe for relative use; basically any root path is
+%% turned into a relative one by prepending a period.
+safe_rel("/"++Path) -> "./"++Path;
+safe_rel(Path) -> Path.
+
+%% @private no need to be efficient, and only worrying about latin characters
+%% for now. Some sort of unicode normalization would be more accurate in the
+%% long run.
 sluggify(Str) ->
     Patterns = [{"[âäàáÀÄÂÁ]", "a"},
                {"[éêëèÉÊËÈ]", "e"},
@@ -269,195 +288,3 @@ month("Oct") -> "10";
 month("Nov") -> "11";
 month("Dec") -> "12".
 
-markdown(Bin) ->
-    iolist_to_binary(parse(binary_to_list(Bin))).
-
-% ideally we'd get a more clever algorithm but eh
-parse([]) -> [];
-parse("{% markdown %}" ++ Rest) ->
-    {MD, Other} = markdown_conv(Rest),
-    [MD | parse(Other)];
-parse([Char | Rest]) ->
-    [Char | parse(Rest)].
-
-markdown_conv(Str) ->
-    case string:split(Str, "{% endmarkdown %}", leading) of
-        [MarkDown, Rest] ->
-            {markdown:conv_utf8(MarkDown), Rest};
-        _ ->
-            error("Markdown closing tag ({% endmarkdown %}) not found")
-    end.
-
-expand_content(OutMap, Str) ->
-    maybe
-        %% Find the spots with {! inline <filename> Node[#id] !} in them and
-        %% split the components
-        [PreExpand, TmpStr] ?= string:split(Str, "{! inline ", leading),
-        [Opts, PostExpand] ?= string:split(TmpStr, " !}", leading),
-        [File, Node] ?= string:split(Opts, " ", trailing),
-        {Pre, Mid, Post} =
-          maybe
-              %% Happy path substitution
-              FileName = unicode:characters_to_list(File),
-              Path = case cfg(filename:extension(FileName), OutMap) of
-                  undefined -> FileName;
-                  OutDir -> filename:join(OutDir, FileName)
-              end,
-              %% These are most faillible calls
-              {ok, FileContent} ?= file:read_file(Path),
-              {ok, Content} ?= get_node(Node, FileContent),
-              {PreExpand, Content, PostExpand}
-          else
-              Reason ->
-                %% Eat up all errors by leaving things the same.
-                rebar_api:warn("post-processing failed for file ~ts and node ~ts for reason ~p",
-                               [File, Node, Reason]),
-                {PreExpand, ["{! inline ", Opts, " !}"], PostExpand}
-          end,
-        unicode:characters_to_binary([Pre, Mid, expand_content(OutMap, Post)])
-    else
-        %% no valid processing declaration found, skip this file
-        _ -> Str
-    end.
-
-render_code(BaseHTML) ->
-    case has_pygments() of
-        true ->
-            map_pre(unicode:characters_to_binary(BaseHTML));
-        false ->
-            warn_once("Pygments not installed, will not "
-                      "auto-generate syntax highlighting"),
-            BaseHTML
-    end.
-
-has_pygments() ->
-    case get(has_pygments) of
-        undefined ->
-            case re:run(os:cmd("pygmentize"), "command not found") of
-                nomatch ->
-                    put(has_pygments, true),
-                    true;
-                _ ->
-                    put(has_pygments, false),
-                    false
-            end;
-        Res ->
-            Res
-    end.
-
-warn_once(Str) ->
-    case get({warn, Str}) of
-        undefined ->
-            put({warn, Str}, true),
-            rebar_api:warn("~ts~n", [Str]);
-        _ ->
-            ok
-    end.
-
-%% Because pygments uses semantic linebreaks and that the
-%% mochihtml library doesn't preserve it, we need to substitute
-%% all <pre> tag contents by hand.
-%% TODO: optimize parser & pygments calls
-map_pre(<<"<pre>", Rest/binary>>) ->
-    {Until, More} = until_end_pre(Rest),
-    <<"<pre>", Until/binary, "</pre>", (map_pre(More))/binary>>;
-map_pre(<<"<pre ", Rest/binary>>) ->
-    {Lang, More} = get_lang_attrs(Rest),
-    {Content, Tail} = until_end_pre(More),
-    {ok, Fd} = file:open(?TMP_CODE_FILE, [write, raw]),
-    ok = file:write(Fd, unescape_code(Content)),
-    file:close(Fd),
-    Cmd = unicode:characters_to_list(
-        ["pygmentize ", ["-l ", Lang], " -f html ", ?TMP_CODE_FILE]
-    ),
-    Code = os:cmd(Cmd),
-    NewCode = unicode:characters_to_binary(Code),
-    <<NewCode/binary, (map_pre(Tail))/binary>>;
-map_pre(<<Char, Rest/binary>>) ->
-    <<Char, (map_pre(Rest))/binary>>;
-map_pre(<<>>) ->
-    <<>>.
-
-until_end_pre(Bin) -> until_end_pre(Bin, <<>>).
-until_end_pre(<<"</pre>", Rest/binary>>, Acc) ->
-    {Acc, Rest};
-until_end_pre(<<Char, Rest/binary>>, Acc) ->
-    until_end_pre(Rest, <<Acc/binary, Char>>).
-
-get_lang_attrs(<<"class=", Delim, LangStr/binary>>) ->
-    {Str, Rest} = extract_str(LangStr, Delim),
-    Lang = handle_pre_class(Str),
-    {Lang, drop_until_tag_close(Rest)};
-get_lang_attrs(<<">", Rest/binary>>) ->
-    {undefined, Rest};
-get_lang_attrs(<<_, Rest/binary>>) ->
-    get_lang_attrs(Rest).
-
-extract_str(Str, Delim) -> extract_str(Str, Delim, <<>>).
-
-extract_str(<<$\\, Quoted, Rest/binary>>, Delim, Acc) when Quoted == Delim ->
-    extract_str(Rest, Delim, <<Acc/binary, $\\, Quoted>>);
-extract_str(<<Char, Rest/binary>>, Delim, Acc) when Char == Delim ->
-    {Acc, Rest};
-extract_str(<<Char, Rest/binary>>, Delim, Acc) ->
-    extract_str(Rest, Delim, <<Acc/binary, Char>>).
-
-handle_pre_class(<<"brush:erl">>) -> <<"erlang">>;
-handle_pre_class(<<"brush:eshell">>) -> <<"erlang">>;
-handle_pre_class(<<"brush:", Lang/binary>>) -> Lang;
-handle_pre_class(Lang) -> Lang.
-
-drop_until_tag_close(<<">", Rest/binary>>) ->
-    Rest;
-drop_until_tag_close(<<_, Rest/binary>>) ->
-    drop_until_tag_close(Rest).
-
-unescape_code(OrigStr) ->
-    lists:foldl(fun({Pat, Repl}, Str) ->
-                    re:replace(Str, Pat, Repl, [global])
-                end,
-                OrigStr,
-                [{"&gt;", ">"},
-                 {"&lt;", "<"},
-                 {"&amp;", "\\&"}]).
-
-%% @private Go down a mochiweb_html tree, and extract the first node that
-%% matches the passed in argument. The node may either be a name for the
-%% element (such as `article`) or a name and an id (such as `div#id`).
-get_node(Node, Data) ->
-    case string:split(Node, "#") of
-        [NodePart, Id] ->
-            get_node(unicode:characters_to_binary(NodePart),
-                     unicode:characters_to_binary(Id),
-                     Data);
-        _ ->
-            get_node(unicode:characters_to_binary(Node), undefined, Data)
-    end.
-
-get_node(Node, Id, Data) ->
-    case tree_node(Node, Id, mochiweb_html:parse(Data)) of
-        not_found ->
-            {error, {node_not_found, {Node, Id}}};
-        Content ->
-            {ok, mochiweb_html:to_html({<<"div">>, [], Content})}
-    end.
-
-tree_node(Node, Id, {Node, Attrs, Content}) ->
-    case cfg(<<"id">>, Attrs) of
-        Id -> Content;
-        _ when Id =:= undefined -> Content;
-        _ -> tree_node(Node, Id, Content)
-    end;
-tree_node(Node, Id, {_, _, Tree}) ->
-    tree_node(Node, Id, Tree);
-tree_node(_, _, {comment, _}) ->
-    not_found;
-tree_node(_, _, Bin) when is_binary(Bin) ->
-    not_found;
-tree_node(_, _, []) ->
-    not_found;
-tree_node(Node, Id, [H|T]) ->
-    case tree_node(Node, Id, H) of
-        not_found -> tree_node(Node, Id, T);
-        Content -> Content
-    end.
