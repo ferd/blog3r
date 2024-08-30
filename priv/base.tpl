@@ -3,7 +3,7 @@
   <head>
     <meta http-equiv="Content-Type" content="text/html;charset=UTF-8">
     <link rel="shortcut icon" href="{{ url.img }}favicon.ico" type="image/x-icon"/>
-    <title>Blogerl Demo -> {% block title %}{{ meta.title }}{% endblock %}</title>
+    <title>Blogerl Demo -> {% block title %}{{ page.title }}{% endblock %}</title>
     <link rel="stylesheet" href="{{ url.css }}screen.css" media="screen, projection" />
     <link href="{{ url.base }}feed.rss" type="application/rss+xml" rel="alternate" title="blog newsfeed" />
   </head>
@@ -15,10 +15,13 @@
     
     <article>
         {% block date %}
-            <span class="date">{{ meta.date }}</span>
+            <span class="date">{{ page.date }}</span>
         {% endblock %}
+        <h2>{{ page.title|default:"Oh, Hello There!" }}</h2>
+        <div id="article">
         {% block content %}
         {% endblock %}
+        </div>
     </article>
   
     <footer>

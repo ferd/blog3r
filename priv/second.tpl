@@ -1,8 +1,6 @@
 {% extends "base.tpl" %}
 
 {% block content %}
-<h2>Second Article</h2>
-
 <h3>Section 1</h3>
 
 <p>Aliquam erat erat, semper sit amet vehicula non, fringilla vitae diam. Vivamus iaculis dui et nibh placerat imperdiet. Proin leo massa, facilisis blandit eleifend at, consequat quis leo. <em>Mauris vitae erat nec arcu tristique consequat. Sed nulla orci, ultricies quis tempor vitae, semper id lectus.</em> Curabitur vel venenatis diam. Sed congue ullamcorper rhoncus. Cras fringilla consectetur tincidunt. Quisque vulputate facilisis nibh, non pharetra urna malesuada eget. Fusce condimentum libero at erat semper quis tristique nunc hendrerit. Aliquam vulputate sollicitudin elit eu volutpat. Aliquam lorem arcu, ornare ac porttitor at, blandit sit amet mi. Phasellus cursus facilisis lectus, et consequat neque elementum nec. Suspendisse auctor mollis turpis, nec volutpat augue sagittis at. Vivamus vitae metus non tellus ultricies imperdiet et eu risus. Nunc non augue orci.</p>
