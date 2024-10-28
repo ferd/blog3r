@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta http-equiv="Content-Type" content="text/html;charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="shortcut icon" href="{{ url.img }}favicon.ico" type="image/x-icon"/>
     <title>Blogerl Demo -> {% block title %}{{ page.title }}{% endblock %}</title>
     <link rel="stylesheet" href="{{ url.css }}screen.css" media="screen, projection" />
